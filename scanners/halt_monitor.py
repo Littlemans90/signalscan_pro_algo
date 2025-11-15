@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 import time
 from threading import Thread, Event
+import pytz
 from PyQt5.QtCore import QObject, pyqtSignal
 from core.file_manager import FileManager
 from core.logger import Logger
@@ -25,12 +26,12 @@ class HaltMonitor(QObject):
         self.stop_event = Event()
         self.thread = None
         
-        # Fetch interval: 2.5 minutes
-        self.fetch_interval = 150  # seconds
+        # Fetch interval: 60 seconds (matches NASDAQ RSS update frequency)
+        self.fetch_interval = 60  # seconds
         
     def start(self):
         """Start halt monitoring"""
-        self.log.halt("[HALT-MONITOR] Starting halt monitor (every 2.5 minutes)")
+        self.log.halt("[HALT-MONITOR] Starting halt monitor (every 60 seconds)")
         self.stop_event.clear()
         self.thread = Thread(target=self._run_loop, daemon=True)
         self.thread.start()
@@ -43,11 +44,11 @@ class HaltMonitor(QObject):
             self.thread.join(timeout=5)
             
     def _run_loop(self):
-        """Main loop: fetch halts every 2.5 minutes"""
+        """Main loop: fetch halts every 60 seconds"""
         # Run immediately on start
         self._fetch_halts()
         
-        # Then run every 2.5 minutes
+        # Then run every 60 seconds
         while not self.stop_event.is_set():
             self.stop_event.wait(self.fetch_interval)
             if not self.stop_event.is_set():
@@ -79,13 +80,15 @@ class HaltMonitor(QObject):
                 if data.get('status') == 'HALTED'
             }
             
-            self.log.halt(f"[HALT-MONITOR] Total merged: {len(all_halts)}, Active halts: {len(active_halts_only)}")
+            # Save ALL halts to halts.json (including resumed)
+            # This ensures historical tracking works
+            self.log.halt(f"[HALT-MONITOR] Total merged: {len(all_halts)} halts")
             
-            if active_halts_only:
-                self._process_halts(active_halts_only)
-                self.log.halt(f"[HALT-MONITOR] OK Processed {len(active_halts_only)} active halts")
+            if all_halts:
+                self._process_halts(all_halts)
+                self.log.halt(f"[HALT-MONITOR] OK Processed {len(all_halts)} halts (active + resumed)")
             else:
-                self.log.halt("[HALT-MONITOR] No active halts found")
+                self.log.halt("[HALT-MONITOR] No halts found")
                 
         except Exception as e:
             self.log.crash(f"[HALT-MONITOR] Error fetching halts: {e}")
@@ -273,66 +276,82 @@ class HaltMonitor(QObject):
             return {}
 
     def _process_halts(self, halts: dict):
-        """Process halt data, update files, and emit signals to GUI"""
+        """Process and save halt data to both halts.json (all) and activehalts.json (active only)"""
+        from datetime import datetime, timedelta
+        import pytz
+        
         try:
-            # Load existing data
-            active_halts = self.fm.load_active_halts()
-            historical_halts = self.fm.load_halts()
+            # Get current time in Eastern (NASDAQ timezone)
+            eastern = pytz.timezone('US/Eastern')
+            now = datetime.now(eastern)
+            
+            # Prepare data for halts.json (ALL halts from last 72 hours)
+            cutoff_time = now - timedelta(hours=72)
+            all_recent_halts = {}
+            active_halts_only = {}
             
             for symbol, halt_data in halts.items():
-                # Filter out Canadian stocks (TSX symbols)
-                if symbol and ('TSX:' in symbol or symbol.endswith('.TO') or symbol.endswith('.TSX')):
-                    self.log.halt(f"[HALT-MONITOR] Skipping Canadian stock: {symbol}")
-                    continue
-                
-                # Enrich with price data from Tier3 if available
-                if hasattr(self, 'tier3') and self.tier3 and hasattr(self.tier3, 'live_data'):
-                    live_data = self.tier3.live_data.get(symbol, {})
-                    prev_close = self.tier3.prev_closes.get(symbol, 0.0)
+                # Parse halt datetime for filtering
+                try:
+                    halt_date_str = halt_data.get('halt_date', '')
+                    halt_time_str = halt_data.get('halt_time', '')
                     
-                    price = live_data.get('price', 0.0)
-                    if not price:
-                        bid = live_data.get('bid', 0.0)
-                        ask = live_data.get('ask', 0.0)
-                        price = (bid + ask) / 2 if bid and ask else 0.0
-                    
-                    if price > 0:
-                        halt_data['price'] = price
-                        halt_data['prev_close'] = prev_close
-                        change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-                        halt_data['change_pct'] = change_pct
-                        self.log.halt(f"[HALT-MONITOR] Enriched {symbol} with Tier3 price: ${price:.2f}")
+                    if halt_date_str and halt_time_str:
+                        # Parse: "11/14/2025" and "10:30:14"
+                        halt_datetime_str = f"{halt_date_str} {halt_time_str}"
+                        halt_datetime = eastern.localize(datetime.strptime(halt_datetime_str, "%m/%d/%Y %H:%M:%S"))
+                        
+                        # Only keep halts from last 72 hours
+                        if halt_datetime >= cutoff_time:
+                            all_recent_halts[symbol] = halt_data
+                            
+                            # Check if this halt is currently ACTIVE
+                            resumption_date = halt_data.get('resumption_date', '')
+                            resumption_time = halt_data.get('resumption_trade_time', '')
+                            
+                            if resumption_date and resumption_time:
+                                # Parse resumption datetime
+                                resumption_str = f"{resumption_date} {resumption_time}"
+                                resumption_datetime = eastern.localize(datetime.strptime(resumption_str, "%m/%d/%Y %H:%M:%S"))
+                                
+                                # If resumption is in the future, it's still active
+                                if resumption_datetime > now:
+                                    active_halts_only[symbol] = halt_data
+                            elif halt_data.get('status') == 'HALTED':
+                                # No resumption time set and status is HALTED = active
+                                active_halts_only[symbol] = halt_data
                     else:
-                        self.log.halt(f"[HALT-MONITOR] No Tier3 price data for {symbol}")
-
-                status = halt_data.get('status', 'HALTED')
-                
-                if status == 'HALTED':
-                    # Add to active halts
-                    active_halts[symbol] = halt_data
-                    self.log.halt(f"[HALT-MONITOR] HALTED: {symbol} @ ${halt_data.get('price', 0.0):.2f} - {halt_data.get('reason', 'Unknown')[:50]}")
-                    
-                    # Emit signal to GUI
-                    self.halt_signal.emit(halt_data)
-                    
-                elif status == 'RESUMED':
-                    # Remove from active halts if present
-                    was_active = symbol in active_halts
-                    if was_active:
-                        del active_halts[symbol]
-                        self.log.halt(f"[HALT-MONITOR] RESUMED: {symbol} @ ${halt_data.get('price', 0.0):.2f} (was active)")
-                    
-                    # Always save to historical (even if wasn't actively tracked)
-                    halt_id = f"{symbol}_{int(time.time())}"
-                    historical_halts[halt_id] = halt_data
-                    
-                    # Emit signal to GUI only if it was actively halted
-                    if was_active:
-                        self.halt_signal.emit(halt_data)
-                    
-            # Save updated data
-            self.fm.save_active_halts(active_halts)
-            self.fm.save_halts(historical_halts)
+                        # Can't parse date - include to be safe
+                        all_recent_halts[symbol] = halt_data
+                        if halt_data.get('status') == 'HALTED':
+                            active_halts_only[symbol] = halt_data
+                            
+                except Exception as e:
+                    self.log.halt(f"[HALT-MONITOR] Error parsing halt time for {symbol}: {e}")
+                    # Include unparseable halts in all_recent_halts
+                    all_recent_halts[symbol] = halt_data
+                    if halt_data.get('status') == 'HALTED':
+                        active_halts_only[symbol] = halt_data
             
+            # Write ALL recent halts to halts.json
+            halts_list = [
+                {'symbol': symbol, **data}
+                for symbol, data in all_recent_halts.items()
+            ]
+            self.fm.write_json('halts.json', halts_list)
+            
+            # Write ONLY active halts to activehalts.json
+            active_list = [
+                {'symbol': symbol, **data}
+                for symbol, data in active_halts_only.items()
+            ]
+            self.fm.write_json('activehalts.json', active_list)
+            
+            self.log.halt(f"[HALT-MONITOR] Saved {len(all_recent_halts)} recent halts, {len(active_halts_only)} active")
+            
+            # Emit signal for each ACTIVE halt (for live GUI updates)
+            for symbol, halt_data in active_halts_only.items():
+                self.halt_signal.emit({'symbol': symbol, **halt_data})
+                
         except Exception as e:
             self.log.crash(f"[HALT-MONITOR] Error processing halts: {e}")

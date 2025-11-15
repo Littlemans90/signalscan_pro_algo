@@ -272,7 +272,7 @@ class MainWindow(QMainWindow):
         # Separator line
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("background-color: #30363d;")
+        separator.setStyleSheet("background-color: #58a6ff;")
         layout.addWidget(separator)
         
         # Bottom row: Market Indices (horizontal layout)
@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
         indices_timer.timeout.connect(self._update_indices)
         indices_timer.start(30000)
         
-        panel.setStyleSheet("background-color: #1e1e1e; padding: 10px;")
+        panel.setStyleSheet("background-color: #000000; padding: 10px;")
         return panel
     
     # =========================================================================
@@ -415,15 +415,21 @@ class MainWindow(QMainWindow):
             
             # Column 1: Price
             price = data.get("price", 0)
-            self.vectortable.setItem(row, 1, QTableWidgetItem(f"{price:.2f}"))
-            
+            price_item = QTableWidgetItem(f"{price:.2f}")
+
             # Column 2: Change%
             changepct = 0
             if self.tier3 and hasattr(self.tier3, 'livedata'):
                 livedata = self.tier3.livedata.get(symbol, {})
                 changepct = livedata.get("changepct", 0)
+
+            # Apply same color to both price and change
+            color = QColor(0, 255, 0) if changepct > 0 else QColor(255, 0, 0)
+            price_item.setForeground(color)
+            self.vectortable.setItem(row, 1, price_item)
+
             change_item = QTableWidgetItem(f"{changepct:.2f}%")
-            change_item.setForeground(QColor(0, 255, 0) if changepct > 0 else QColor(255, 0, 0))
+            change_item.setForeground(color)
             self.vectortable.setItem(row, 2, change_item)
             
             # Column 3: Time
@@ -483,15 +489,21 @@ class MainWindow(QMainWindow):
             
             # Column 1: Price
             price = data.get("price", 0)
-            self.squeezetable.setItem(row, 1, QTableWidgetItem(f"{price:.2f}"))
-            
+            price_item = QTableWidgetItem(f"{price:.2f}")
+
             # Column 2: Change%
             changepct = 0
             if self.tier3 and hasattr(self.tier3, 'livedata'):
                 livedata = self.tier3.livedata.get(symbol, {})
                 changepct = livedata.get("changepct", 0)
+
+            # Apply same color to both price and change
+            color = QColor(0, 255, 0) if changepct > 0 else QColor(255, 0, 0)
+            price_item.setForeground(color)
+            self.squeezetable.setItem(row, 1, price_item)
+
             change_item = QTableWidgetItem(f"{changepct:.2f}%")
-            change_item.setForeground(QColor(0, 255, 0) if changepct > 0 else QColor(255, 0, 0))
+            change_item.setForeground(color)
             self.squeezetable.setItem(row, 2, change_item)
             
             # Column 3: Time
@@ -542,6 +554,83 @@ class MainWindow(QMainWindow):
             self.log.crash(f"[GUI] Error handling Squeeze update: {e}")
 
     @pyqtSlot(dict)
+    def on_trend_update(self, data):
+        """Handle MOMO Trend updates"""
+        try:
+            symbol = data.get("symbol", "N/A")
+            row = self.find_row(self.trend_table, symbol)
+            if row == -1:
+                row = self.trend_table.rowCount()
+                self.trend_table.insertRow(row)
+            
+            # Column 0: Symbol
+            self.trend_table.setItem(row, 0, QTableWidgetItem(symbol))
+            
+            # Column 1: Price
+            price = data.get("price", 0)
+            price_item = QTableWidgetItem(f"{price:.2f}")
+            
+            # Column 2: Change%
+            changepct = 0
+            if self.tier3 and hasattr(self.tier3, 'livedata'):
+                livedata = self.tier3.livedata.get(symbol, {})
+                changepct = livedata.get("changepct", 0)
+            
+            # Apply same color to both price and change
+            color = QColor(0, 255, 0) if changepct > 0 else QColor(255, 0, 0)
+            price_item.setForeground(color)
+            self.trend_table.setItem(row, 1, price_item)
+            
+            change_item = QTableWidgetItem(f"{changepct:.2f}%")
+            change_item.setForeground(color)
+            self.trend_table.setItem(row, 2, change_item)
+            
+            # Column 3: Time
+            timestamp = data.get("timestamp", "")
+            try:
+                dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                est = pytz.timezone("US/Eastern")
+                dt_est = dt.astimezone(est)
+                time_display = dt_est.strftime("%I:%M%p").lower()
+                self.trend_table.setItem(row, 3, QTableWidgetItem(time_display))
+            except:
+                self.trend_table.setItem(row, 3, QTableWidgetItem("--"))
+            
+            # Column 4: Trend STR (Strength)
+            trend_str = data.get("trend_strength", 0)
+            self.trend_table.setItem(row, 4, QTableWidgetItem(f"{trend_str:.2f}"))
+            
+            # Column 5: Model
+            model = data.get("model", "")
+            self.trend_table.setItem(row, 5, QTableWidgetItem(model))
+            
+            # Column 6: Confidence
+            confidence = data.get("confidence", 0)
+            self.trend_table.setItem(row, 6, QTableWidgetItem(f"{confidence:.1f}%"))
+            
+            # Column 7: Direction
+            direction = data.get("direction", "NEUTRAL")
+            direction_item = QTableWidgetItem(direction)
+            if direction == "UP":
+                direction_item.setForeground(QColor(0, 255, 0))
+            elif direction == "DOWN":
+                direction_item.setForeground(QColor(255, 0, 0))
+            self.trend_table.setItem(row, 7, direction_item)
+            
+            # Column 8: Signal
+            signal = data.get("signal", "WATCH")
+            signal_item = QTableWidgetItem(signal)
+            signal_item.setFont(QFont("Arial", 10, QFont.Bold))
+            if "BUY" in signal:
+                signal_item.setForeground(QColor(0, 255, 0))
+            elif "SELL" in signal:
+                signal_item.setForeground(QColor(255, 0, 0))
+            self.trend_table.setItem(row, 8, signal_item)
+            
+        except Exception as e:
+            self.log.crash(f"[GUI] Error handling Trend update: {e}")
+
+    @pyqtSlot(dict)
     def on_news_update(self, news_data):
         """Receive News update (VAULT + LIVE)"""
         symbol = news_data.get('symbol', 'N/A')
@@ -561,21 +650,23 @@ class MainWindow(QMainWindow):
         
         # Column 0: Symbol
         symbol_item = QTableWidgetItem(symbol)
-        symbol_item.setFont(QFont("Arial", 10, QFont.Bold))
         self.news_table.setItem(row, 0, symbol_item)
         
         # Column 1: Price
         price = news_data.get('price', 0.0)
-        self.news_table.setItem(row, 1, QTableWidgetItem(f"${price:.2f}" if isinstance(price, (int, float)) and price > 0 else "--"))
-        
+        price_item = QTableWidgetItem(f"${price:.2f}" if isinstance(price, (int, float)) and price > 0 else "--")
+
         # Column 2: Change%
         change = news_data.get('change_pct', 0.0)
         change_item = QTableWidgetItem(f"{change:+.2f}%" if isinstance(change, (int, float)) and change != 0 else "--")
+
+        # Apply same color to both price and change
         if isinstance(change, (int, float)):
-            if change > 0:
-                change_item.setForeground(QColor(0, 255, 0))
-            elif change < 0:
-                change_item.setForeground(QColor(255, 0, 0))
+            color = QColor(0, 255, 0) if change > 0 else QColor(255, 0, 0)
+            price_item.setForeground(color)
+            change_item.setForeground(color)
+
+        self.news_table.setItem(row, 1, price_item)
         self.news_table.setItem(row, 2, change_item)
         
         # Column 3: Time (Timestamp)
@@ -616,7 +707,6 @@ class MainWindow(QMainWindow):
         
         # Column 0: Symbol
         symbol_item = QTableWidgetItem(symbol)
-        symbol_item.setFont(QFont("Arial", 11, QFont.Bold))
         self.halt_table.setItem(row, 0, symbol_item)
         
         # Column 1: Status
@@ -624,10 +714,8 @@ class MainWindow(QMainWindow):
         status_item = QTableWidgetItem(status)
         if status == "HALTED":
             status_item.setForeground(QColor(255, 0, 0))
-            status_item.setFont(QFont("Arial", 10, QFont.Bold))
         elif status == "RESUMED":
             status_item.setForeground(QColor(0, 255, 0))
-            status_item.setFont(QFont("Arial", 10, QFont.Bold))
         self.halt_table.setItem(row, 1, status_item)
         
         # Column 2: Price
@@ -725,6 +813,14 @@ class MainWindow(QMainWindow):
                 item.setFont(QFont("Arial", 10, QFont.Bold))
             elif col_name == 'price' and isinstance(value, (int, float)):
                 item = QTableWidgetItem(f"${value:.2f}")
+                # Apply color based on change_pct
+                change_pct = stock_data.get('change_pct', 0)
+                if isinstance(change_pct, (int, float)):
+                    if change_pct > 0:
+                        item.setForeground(QColor(0, 255, 0))
+                    elif change_pct < 0:
+                        item.setForeground(QColor(255, 0, 0))
+
             elif 'pct' in col_name or 'change' in col_name:
                 if isinstance(value, (int, float)):
                     item = QTableWidgetItem(f"{value:+.2f}%")
@@ -1355,17 +1451,17 @@ class MainWindow(QMainWindow):
         """Apply dark theme stylesheet to the application"""
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #0d1117;
+                background-color: #000000;
             }
             QWidget {
-                background-color: #0d1117;
+                background-color: #000000;
                 color: #c9d1d9;
                 font-family: 'Segoe UI', Arial, sans-serif;
                 font-size: 24px;
             }
             QTabWidget::pane {
-                border: 1px solid #30363d;
-                background-color: #161b22;
+                border: 1px solid #58a6ff;
+                background-color: #000000;
             }
             QTabBar {
                 qproperty-expanding: true;
@@ -1374,43 +1470,43 @@ class MainWindow(QMainWindow):
                 alignment: center;
             }
             QTabBar::tab {
-                background-color: #161b22;
-                color: #8b949e;
-                padding: 10px 50px;
+                background-color: #000000;
+                color: #967bb6;
+                padding: 10px 25px;
                 margin-right: 2px;
-                border: 1px solid #30363d;
+                border: 1px solid #58a6ff;
                 border-bottom: none;
                 font-size: 28px;
-                min-width: 100px;
+                min-width: 150px;
                 min-height: 24px;
             }
             QTabBar::tab:selected {
-                background-color: #0d1117;
-                color: #58a6ff;
+                background-color: #967bb6;
+                color: #000000;
                 font-weight: bold;
             }
             QTableWidget {
-                background-color: #0d1117;
-                alternate-background-color: #161b22;
-                gridline-color: #30363d;
-                border: 1px solid #30363d;
+                background-color: #000000;
+                alternate-background-color: #0d1117;
+                gridline-color: #58a6ff;
+                border: 1px solid #967bb6;
             }
             QTableWidget::item {
                 padding: 16px;
                 font-size: 24px;
             }
             QHeaderView::section {
-                background-color: #161b22;
-                color: #c9d1d9;
-                padding: 8px;
-                border: 1px solid #30363d;
+                background-color: #000000;
+                color: #58a6ff;
+                padding: 6px;
+                border: 1px solid #58a6ff;
                 font-weight: bold;
                 font-size: 24px;
             }
             QStatusBar {
-                background-color: #161b22;
-                color: #8b949e;
-                border-top: 1px solid #30363d;
+                background-color: #000000;
+                color: #967bb6;
+                border-top: 1px solid #58a6ff;
             }
         """)
     
