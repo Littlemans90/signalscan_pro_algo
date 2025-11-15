@@ -11,12 +11,38 @@ from PyQt5.QtWidgets import (
     QPushButton, QStatusBar, QHeaderView, QFrame
 )
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, pyqtSlot
+from PyQt5.QtMultimedia import QSound
 from PyQt5.QtGui import QColor, QFont, QPixmap
 from datetime import datetime
 import pytz
 import json
 import os
 
+
+class SoundAlertManager:
+    """Manages sound alerts for trading channels"""
+    
+    def __init__(self, logger):
+        self.log = logger
+        self.sound_folder = "sounds"
+        
+        # Load sound files
+        self.sounds = {
+            'morse_code': QSound(os.path.join(self.sound_folder, "morse_code_alert.wav")),
+            'news_flash': QSound(os.path.join(self.sound_folder, "iphone_news_flash.wav")),
+            'halt_resume': QSound(os.path.join(self.sound_folder, "halt_resume.wav")),
+            'nyse_bell': QSound(os.path.join(self.sound_folder, "nyse_bell.wav")),
+            'pregap': QSound(os.path.join(self.sound_folder, "woke_up_this_morning.wav"))
+        }
+        self.log.scanner("[SOUND] Alert system initialized")
+    
+    def play_sound(self, sound_name):
+        """Play a sound file"""
+        if sound_name in self.sounds:
+            self.sounds[sound_name].play()
+            self.log.scanner(f"[SOUND] Playing {sound_name}")
+        else:
+            self.log.warning(f"[SOUND] Unknown sound: {sound_name}")
 
 class MainWindow(QMainWindow):
     """Main application window for SignalScan PRO"""
@@ -36,6 +62,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SignalScan PRO - US Stock Market Scanner")
         self.setGeometry(50, 50, 500, 500)
         
+        # Initialize sound alert manager
+        self.sound_alerts = SoundAlertManager(self.log)
+
         # Initialize UI
         self._init_ui()
         
@@ -324,6 +353,7 @@ class MainWindow(QMainWindow):
     def on_pregap_update(self, stock_data):
         """Receive PreGap channel update (LIVE ONLY)"""
         self.log.scanner(f"[GUI<-TIER3] Received PREGAP signal: {stock_data.get('symbol')}")
+        self.sound_alerts.play_sound('pregap')
         self._add_or_update_stock(self.pregap_table, stock_data, [
             'symbol', 'price', 'change_pct', 'timestamp', 'gap_pct', 'volume', 'rvol', 'float', 'news'
         ])
@@ -405,6 +435,7 @@ class MainWindow(QMainWindow):
         """Handle MOMO Vector updates"""
         try:
             symbol = data.get("symbol", "N/A")
+            self.sound_alerts.play_sound('morse_code')
             row = self.find_row(self.vectortable, symbol)
             if row == -1:
                 row = self.vectortable.rowCount()
@@ -479,6 +510,7 @@ class MainWindow(QMainWindow):
         """Handle MOMO Squeeze updates"""
         try:
             symbol = data.get("symbol", "N/A")
+            self.sound_alerts.play_sound('morse_code')
             row = self.find_row(self.squeezetable, symbol)
             if row == -1:
                 row = self.squeezetable.rowCount()
@@ -558,6 +590,7 @@ class MainWindow(QMainWindow):
         """Handle MOMO Trend updates"""
         try:
             symbol = data.get("symbol", "N/A")
+            self.sound_alerts.play_sound('morse_code')
             row = self.find_row(self.trend_table, symbol)
             if row == -1:
                 row = self.trend_table.rowCount()
@@ -634,6 +667,7 @@ class MainWindow(QMainWindow):
     def on_news_update(self, news_data):
         """Receive News update (VAULT + LIVE)"""
         symbol = news_data.get('symbol', 'N/A')
+        self.sound_alerts.play_sound('news_flash')
         headline = news_data.get('headline', 'No headline')
         
         # Check if this exact headline already exists to avoid duplicates
@@ -716,6 +750,7 @@ class MainWindow(QMainWindow):
             status_item.setForeground(QColor(255, 0, 0))
         elif status == "RESUMED":
             status_item.setForeground(QColor(0, 255, 0))
+            self.sound_alerts.play_sound('halt_resume')
         self.halt_table.setItem(row, 1, status_item)
         
         # Column 2: Price
