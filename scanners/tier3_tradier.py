@@ -439,6 +439,13 @@ class TradierCategorizer(QObject):
         self.log.scanner(f"[TIER3-DEBUG] _categorize_symbol CALLED for {symbol}")
         try:
             live_data = self.live_data.get(symbol, {})
+            
+            # === ADDED DEBUG LOG ===
+            price = live_data.get('price', 0)
+            gap_pct = live_data.get('gap_pct', 0)
+            volume = live_data.get('volume', 0)
+            self.log.scanner(f"[CHANNEL-TEST] Raw live_data for {symbol}: price={price}, gap_pct={gap_pct:.2f}%, volume={volume}")
+            # === END ADDED DEBUG ===
 
             # Enrich with calculated fields
             stock_data = self._enrich_stock_data(symbol, live_data)
@@ -448,9 +455,17 @@ class TradierCategorizer(QObject):
             if symbol == 'AES':
                 self.log.scanner(f"[TIER3-DEBUG] AES enriched: price={stock_data.get('price')}, gap_pct={stock_data.get('gap_pct', 0):.2f}, rvol={stock_data.get('rvol', 0):.2f}, volume={stock_data.get('volume')}, volume_avg={stock_data.get('volume_avg')}, is_hod={stock_data.get('is_hod')}")
 
+            # === ADDED DEBUG LOG ===
+            self.log.scanner(f"[CHANNEL-TEST] {symbol} - Calling detect_channel with enriched data...")
+            # === END ADDED DEBUG ===
+
             # Detect channel
             channel = self.detector.detect_channel(stock_data)
             self.log.scanner(f"[TIER3-DEBUG] {symbol} detected channel: {channel}")
+            
+            # === ADDED DEBUG LOG ===
+            self.log.scanner(f"[CHANNEL-TEST] ✓ {symbol} → {channel if channel else 'NO MATCH'}")
+            # === END ADDED DEBUG ===
         
             if symbol == 'AES':
                 self.log.scanner(f"[TIER3-DEBUG] AES detected channel: {channel}")

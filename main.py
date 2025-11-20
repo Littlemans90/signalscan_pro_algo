@@ -111,10 +111,38 @@ class SignalScanPRO:
         print("Scanner is now running. Press Ctrl+C to stop.")
         print("=" * 60)
         
-        # Keep running
+        # Phase 3: Launch GUI
+        print("\n" + "=" * 60)
+        print("PHASE 3: Starting GUI")
+        print("=" * 60)
+        print()
+        
+        from PyQt5.QtWidgets import QApplication
+        from gui.main_window import MainWindow
+        
+        print("[GUI] Initializing Qt application...")
+        app = QApplication(sys.argv)
+        
+        print("[GUI] Creating main window...")
+        window = MainWindow(
+            file_manager=self.file_manager,
+            logger=self.logger,
+            tier1=self.tier1,
+            tier3=self.tier3,
+        )
+        
+        print("[GUI] Showing main window...")
+        window.show()
+        
+        print("\n" + "=" * 60)
+        print("PHASE 3 STATUS: GUI Active OK")
+        print("=" * 60)
+        print("\nScanner GUI is now running. Close window or press Ctrl+C to stop.")
+        print("=" * 60)
+        
+        # Start Qt event loop
         try:
-            while True:
-                time.sleep(1)
+            sys.exit(app.exec_())
         except KeyboardInterrupt:
             self.stop()
             

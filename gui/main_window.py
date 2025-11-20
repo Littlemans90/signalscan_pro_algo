@@ -667,7 +667,7 @@ class MainWindow(QMainWindow):
     def on_news_update(self, news_data):
         """Receive News update (VAULT + LIVE)"""
         symbol = news_data.get('symbol', 'N/A')
-        self.sound_alerts.play_sound('news_flash')
+        #self.sound_alerts.play_sound('news_flash')
         headline = news_data.get('headline', 'No headline')
         
         # Check if this exact headline already exists to avoid duplicates
@@ -746,9 +746,9 @@ class MainWindow(QMainWindow):
         # Column 1: Status
         status = halt_data.get('status', 'Unknown')
         status_item = QTableWidgetItem(status)
-        if status == "HALTED":
+        if status == "Halted":
             status_item.setForeground(QColor(255, 0, 0))
-        elif status == "RESUMED":
+        elif status == "Resumed":
             status_item.setForeground(QColor(0, 255, 0))
             self.sound_alerts.play_sound('halt_resume')
         self.halt_table.setItem(row, 1, status_item)
@@ -784,25 +784,6 @@ class MainWindow(QMainWindow):
         if isinstance(resume_time, str) and resume_time != 'N/A' and resume_time:
             try:
                 from dateutil import parser
-                import pytz
-                dt = parser.parse(resume_time)  # Parse any format
-                # Convert to EST
-                est = pytz.timezone('US/Eastern')
-                if dt.tzinfo is None:
-                    dt = pytz.utc.localize(dt)  # Assume UTC if no timezone
-                dt_est = dt.astimezone(est)
-                resume_time_display = dt_est.strftime('%I:%M%p - %a, %d %b').lower()  # 3:57pm - Tue, 11 Nov
-            except Exception as e:
-                resume_time_display = resume_time  # Fallback to raw string
-        else:
-            resume_time_display = '-'
-        self.halt_table.setItem(row, 5, QTableWidgetItem(resume_time_display))
-        
-        # Column 5: Resume Time
-        resume_time = halt_data.get('resume_time', 'N/A')
-        if isinstance(resume_time, str) and resume_time != 'N/A' and resume_time:
-            try:
-                from dateutil import parser
                 dt = parser.parse(resume_time)  # Handles both ISO and RSS pubDate formats
                 resume_time_display = dt.strftime('%m/%d %H:%M')  # Shows: 11/11 11:45
             except:
@@ -811,17 +792,6 @@ class MainWindow(QMainWindow):
             resume_time_display = '-'  # Not resumed yet
         self.halt_table.setItem(row, 5, QTableWidgetItem(resume_time_display))
 
-        
-        # Column 5: Resume Time
-        resume_time = halt_data.get('resume_time', 'N/A')
-        if isinstance(resume_time, str) and resume_time != 'N/A':
-            try:
-                dt = datetime.fromisoformat(resume_time.replace('Z', '+00:00'))
-                resume_time = dt.strftime('%H:%M:%S')
-            except:
-                pass
-        self.halt_table.setItem(row, 5, QTableWidgetItem(str(resume_time)))
-    
     def _add_or_update_stock(self, table, stock_data, columns):
         """Add or update a stock in a table (for live trading channels)"""
         symbol = stock_data.get('symbol', 'N/A')
@@ -1161,13 +1131,24 @@ class MainWindow(QMainWindow):
                     live = self.tier3.live_data.get(symbol, {})
                     prev_close = self.tier3.prev_closes.get(symbol, 0.0)
                     
+                    # Get price data - Tier3 may return strings
                     live_price = live.get('price', 0.0)
-                    if not live_price:
-                        bid = live.get('bid', 0.0)
-                        ask = live.get('ask', 0.0)
+                    bid = live.get('bid', 0.0)
+                    ask = live.get('ask', 0.0)
+                    
+                    # Convert all to float
+                    try:
+                        live_price = float(live_price) if live_price else 0.0
+                        bid = float(bid) if bid else 0.0
+                        ask = float(ask) if ask else 0.0
+
+                    except (ValueError, TypeError):
+                        bid = 0.0
+                        ask = 0.0
                         live_price = (bid + ask) / 2 if bid and ask else 0.0
                     
                     if live_price > 0:
+
                         price = live_price
                         change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
                         halt_data['price'] = price

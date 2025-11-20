@@ -163,3 +163,4 @@ class ChannelDetector:
         start = datetime.strptime(session['start'], '%H:%M').time()
         end = datetime.strptime(session['end'], '%H:%M').time()
         return start <= now < end
+
