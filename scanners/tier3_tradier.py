@@ -11,12 +11,12 @@ import websocket
 import requests
 from threading import Thread, Event
 from datetime import datetime
-from PyQt5.QtCore import QObject, pyqtSignal
+from queue import Queue
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from core.file_manager import FileManager
 from core.logger import Logger
 from config.api_keys import API_KEYS
 from .channel_detector import ChannelDetector
-
 
 class TradierCategorizer(QObject):
     # PyQt5 signals for live GUI updates
@@ -32,6 +32,14 @@ class TradierCategorizer(QObject):
         self.stop_event = Event()
         self.thread = None
         
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
+
         # Tradier credentials
         self.api_key = API_KEYS['TRADIER_API_KEY']
         
@@ -50,7 +58,9 @@ class TradierCategorizer(QObject):
         self.prev_closes = {}
         self.day_opens = {}
         self.day_highs = {}
-        self.price_history = {}
+        self.price_history = {}   
+        # Cache for volume_avg to prevent repeated API calls
+        self.volume_avg_cache = {}
         
         # Categorized stocks by channel
         self.channels = {
@@ -60,7 +70,26 @@ class TradierCategorizer(QObject):
             'rvsl': [],
             'bkgnews': []
         }
-        
+    
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                channel, stock_data = self.signal_queue.get_nowait()
+                
+                # Now we're on the main thread, safe to emit signals
+                if channel == 'pregap':
+                    self.pregap_signal.emit(stock_data)
+                elif channel == 'hod':
+                    self.hod_signal.emit(stock_data)
+                elif channel == 'runup':
+                    self.runup_signal.emit(stock_data)
+                elif channel == 'rvsl':
+                    self.reversal_signal.emit(stock_data)
+                    
+        except Exception as e:
+            self.log.crash(f"[TIER3-TRADIER] Error processing signal queue: {e}")
+    
     def start(self):
         """Start Tradier WebSocket categorizer"""
         self.log.scanner("[TIER3-TRADIER] Starting Tradier categorizer (WebSocket)")
@@ -298,27 +327,33 @@ class TradierCategorizer(QObject):
                 return
     
             if symbol not in self.live_data:
-                self.live_data[symbol] = {'volume': 0}  # Initialize with 0 volume
+                # Try to get starting volume from validated.json
+                validated = self.fm.load_validated()
+                validated_data = next((s for s in validated if s.get('symbol') == symbol), {})
+                starting_volume = validated_data.get('volume', 0)
+                
+                self.live_data[symbol] = {
+                    'volume': starting_volume  # Start with known volume, not 0
+                }
+                self.log.scanner(f"[TIER3-INIT] {symbol}: Initialized with volume={starting_volume:,}")
 
             # Convert price to float
             price = data.get('price')
             if price:
                 price = float(price)
     
-            # ACCUMULATE volume (don't overwrite)
-            trade_size = int(data.get('size', 0))
-            current_volume = self.live_data[symbol].get('volume', 0)
-            new_volume = current_volume + trade_size
+            # USE TRADIER'S CUMULATIVE VOLUME (cvol) - Already includes all trades today
+            cumulative_volume = int(data.get('cvol', 0))
     
             self.live_data[symbol].update({
                 'price': price,
-                'volume': new_volume,  # ADD to cumulative volume
+                'volume': cumulative_volume,  # Use Tradier's cumulative volume
                 'timestamp': datetime.utcnow().isoformat()
             })
         
-            # Log every 50th trade to monitor activity
-            if new_volume % 5000 < trade_size:  # Log when volume crosses 5000, 10000, 15000, etc
-                self.log.scanner(f"[TIER3-TRADE] {symbol}: volume={new_volume}, price={price}")
+            # Log volume milestones
+            if cumulative_volume % 500000 < 10000:  # Log at 500k, 1M, 1.5M, etc
+                self.log.scanner(f"[TIER3-TRADE] {symbol}: volume={cumulative_volume:,}, price={price}")
 
             # Detect channel and emit signal
             self.log.scanner(f"[TIER3-DEBUG] About to categorize: {symbol}")
@@ -341,42 +376,47 @@ class TradierCategorizer(QObject):
             price = live_data.get('price', 0)
             if not price:
                 # For QUOTE messages, calculate from current bid/ask
-                bid = live_data.get('bid', 0)  # CHANGED: Use live_data, not enriched
-                ask = live_data.get('ask', 0)  # CHANGED: Use live_data, not enriched
+                bid = live_data.get('bid', 0)
+                ask = live_data.get('ask', 0)
                 price = (bid + ask) / 2 if bid and ask else 0
-    
+            
             enriched['price'] = price
 
-            self.log.scanner(f"[TIER3-ENRICH] {symbol}: LIVE price={price}, prev_close={self.prev_closes.get(symbol, 0)}, bid={live_data.get('bid', 0)}, ask={live_data.get('ask', 0)}")
-
-
-            if 'volume' not in enriched or enriched.get('volume', 0) == 0:
-                enriched['volume'] = 0  # Set to 0 if missing, rvol will be 0
+            # ===== FIX: Get prev_close in priority order =====
+            prev_close = 0
             
-            # Check if prev_close exists, if not fetch it now
-            prev_close = self.prev_closes.get(symbol, 0)
-
-            # Try to get from validated.json first (Tier2 already has it)
-            if 'prev_close' in enriched and enriched['prev_close'] > 0:
-                prev_close = enriched['prev_close']
-                self.prev_closes[symbol] = prev_close  # Cache it
-                self.log.scanner(f"[TIER3-DEBUG] {symbol}: Got prev_close from validated data = {prev_close}")
+            # Priority 1: From validated.json (Tier2 already has it)
+            if 'prev_close' in validated_data and validated_data.get('prev_close', 0) > 0:
+                prev_close = float(validated_data['prev_close'])
+                self.log.scanner(f"[TIER3-ENRICH] {symbol}: Using prev_close from validated.json = ${prev_close:.2f}")
+            
+            # Priority 2: From our cached dict
+            elif symbol in self.prev_closes and self.prev_closes[symbol] > 0:
+                prev_close = self.prev_closes[symbol]
+                self.log.scanner(f"[TIER3-ENRICH] {symbol}: Using cached prev_close = ${prev_close:.2f}")
+            
+            # Priority 3: Fetch from Tradier NOW (synchronous fallback)
             else:
-                # Last resort: fetch from Alpaca
-                self.log.scanner(f"[TIER3-DEBUG] {symbol}: Missing prev_close, fetching from Alpaca...")
+                self.log.scanner(f"[TIER3-ENRICH] {symbol}: NO prev_close - fetching NOW...")
                 self.fetch_prev_closes([symbol])
                 prev_close = self.prev_closes.get(symbol, 0)
-
-            self.log.scanner(f"[TIER3-DEBUG] {symbol}: prev_close from dict = {prev_close}")
-
-            if prev_close > 0:
+                if prev_close > 0:
+                    self.log.scanner(f"[TIER3-ENRICH] {symbol}: Fetched prev_close = ${prev_close:.2f}")
+                else:
+                    self.log.scanner(f"[TIER3-ENRICH] {symbol}: X FAILED to get prev_close")
+            
+            # Calculate gap_pct
+            if prev_close > 0 and price > 0:
                 gap_pct = ((price - prev_close) / prev_close) * 100
                 enriched['gap_pct'] = gap_pct
-                self.log.scanner(f"[TIER3-DEBUG] {symbol}: gap_pct = ({price} - {prev_close}) / {prev_close} = {gap_pct:.2f}%")
+                enriched['prev_close'] = prev_close
+                self.log.scanner(f"[TIER3-ENRICH] {symbol}: gap_pct = ({price:.2f} - {prev_close:.2f}) / {prev_close:.2f} = {gap_pct:.2f}%")
             else:
                 enriched['gap_pct'] = 0
-                self.log.scanner(f"[TIER3-DEBUG] {symbol}: NO PREV_CLOSE DATA - gap_pct set to 0")
+                enriched['prev_close'] = 0
+                self.log.scanner(f"[TIER3-ENRICH] {symbol}: X GAP CALC FAILED - price={price}, prev_close={prev_close}")
 
+            # Track high of day
             current_high = self.day_highs.get(symbol, price)
             if price > current_high:
                 self.day_highs[symbol] = price
@@ -385,18 +425,30 @@ class TradierCategorizer(QObject):
                 enriched['is_hod'] = False
             enriched['hod_price'] = self.day_highs.get(symbol, price)
             
+            # Calculate rvol with fallback for missing volume_avg
             current_vol = float(live_data.get('volume', 0)) if live_data.get('volume') else 0
-            avg_vol = enriched.get('volume_avg', 1000000)
+            avg_vol = enriched.get('volume_avg', 0)
+            
+            # If volume_avg is missing, fetch it once and cache
+            avg_vol = enriched.get('volume_avg', 1000000)  # Use 1M as fallback if missing
+            
+            enriched['volume_avg'] = avg_vol
             enriched['rvol'] = current_vol / avg_vol if avg_vol > 0 else 0
             
+            # DEBUG: Always log rvol calculation
+            self.log.scanner(f"[TIER3-DEBUG] {symbol}: rvol = {current_vol:,.0f} / {avg_vol:,.0f} = {enriched['rvol']:.2f}")
+            
+            # Track price history for 5min/10min moves
             now = datetime.utcnow()
             if symbol not in self.price_history:
                 self.price_history[symbol] = []
             self.price_history[symbol].append((now, price))
             
+            # Keep only last 15 minutes of history
             cutoff = now.timestamp() - 900
             self.price_history[symbol] = [(ts, p) for ts, p in self.price_history[symbol] if ts.timestamp() > cutoff]
             
+            # Calculate 5-minute price move
             five_min_ago = now.timestamp() - 300
             old_prices = [p for ts, p in self.price_history[symbol] if ts.timestamp() <= five_min_ago]
             if old_prices:
@@ -405,6 +457,7 @@ class TradierCategorizer(QObject):
             else:
                 enriched['move_5min'] = 0
             
+            # Calculate 10-minute price move
             ten_min_ago = now.timestamp() - 600
             old_prices_10 = [p for ts, p in self.price_history[symbol] if ts.timestamp() <= ten_min_ago]
             if old_prices_10:
@@ -416,6 +469,7 @@ class TradierCategorizer(QObject):
             enriched['rvol_5min'] = enriched['rvol']
             enriched['float'] = enriched.get('float', 50000000)
             
+            # Check for breaking news
             bkgnews = self.fm.load_bkgnews()
             enriched['has_breaking_news'] = symbol in bkgnews
             if enriched['has_breaking_news']:
@@ -433,7 +487,7 @@ class TradierCategorizer(QObject):
         except Exception as e:
             self.log.crash(f"[TIER3] Error enriching {symbol}: {e}")
             return live_data
-   
+
     def _categorize_symbol(self, symbol: str):
         """Categorize symbol into appropriate channel and emit signal to GUI"""
         self.log.scanner(f"[TIER3-DEBUG] _categorize_symbol CALLED for {symbol}")
@@ -449,6 +503,19 @@ class TradierCategorizer(QObject):
 
             # Enrich with calculated fields
             stock_data = self._enrich_stock_data(symbol, live_data)
+            
+            # ===== DEBUG: Log complete stock_data for first 5 symbols =====
+            if not hasattr(self, '_debug_logged_symbols'):
+                self._debug_logged_symbols = set()
+            
+            if symbol not in self._debug_logged_symbols and len(self._debug_logged_symbols) < 5:
+                self.log.scanner(f"=" * 80)
+                self.log.scanner(f"[TIER3-COMPLETE-DATA] Full stock_data for {symbol}:")
+                for key, value in sorted(stock_data.items()):
+                    self.log.scanner(f"  {key}: {value}")
+                self.log.scanner(f"=" * 80)
+                self._debug_logged_symbols.add(symbol)
+
             self.log.scanner(f"[TIER3-DEBUG] {symbol} enriched: price={stock_data.get('price')}, gap_pct={stock_data.get('gap_pct')}, volume={stock_data.get('volume')}")
             
             # DEBUG: Log enriched data for AES to see what detector receives
@@ -461,7 +528,16 @@ class TradierCategorizer(QObject):
 
             # Detect channel
             channel = self.detector.detect_channel(stock_data)
-            self.log.scanner(f"[TIER3-DEBUG] {symbol} detected channel: {channel}")
+            
+            if channel:
+                self.log.scanner(f"[TIER3-DETECT] OK {symbol} -> {channel.upper()}")
+            else:
+                # Log why detection failed for high-potential symbols
+                gap = stock_data.get('gap_pct', 0)
+                rvol = stock_data.get('rvol', 0)
+                price = stock_data.get('price', 0)
+                if abs(gap) > 3 or rvol > 1.3:
+                    self.log.scanner(f"[TIER3-DETECT] X {symbol} NO MATCH - price=${price:.2f}, gap={gap:.2f}%, rvol={rvol:.2f}")
             
             # === ADDED DEBUG LOG ===
             self.log.scanner(f"[CHANNEL-TEST] ✓ {symbol} → {channel if channel else 'NO MATCH'}")
@@ -476,23 +552,14 @@ class TradierCategorizer(QObject):
                     self.channels[channel].append(symbol)
                     self.log.scanner(f"[TIER3-TRADIER] OK {symbol} -> {channel.upper()}")
             
-            # Emit signal to GUI based on channel
-            if channel == 'pregap':
-                self.log.scanner(f"[TIER3->GUI] Emitting PREGAP signal for {symbol}: price={stock_data.get('price')}, gap={stock_data.get('gap_pct')}")
-                self.pregap_signal.emit(stock_data)
-            elif channel == 'hod':
-                self.log.scanner(f"[TIER3->GUI] Emitting HOD signal for {symbol}: price={stock_data.get('price')}")
-                self.hod_signal.emit(stock_data)
-            elif channel == 'runup':
-                self.log.scanner(f"[TIER3->GUI] Emitting RUNUP signal for {symbol}: price={stock_data.get('price')}")
-                self.runup_signal.emit(stock_data)
-            elif channel == 'rvsl':
-                self.log.scanner(f"[TIER3->GUI] Emitting REVERSAL signal for {symbol}: price={stock_data.get('price')}")
-                self.reversal_signal.emit(stock_data)
+            # Queue signal emission for main thread (THREAD-SAFE)
+            if channel:
+                self.log.scanner(f"[TIER3->GUI] Queuing {channel.upper()} signal for {symbol}")
+                self.signal_queue.put((channel, stock_data))
                 
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error categorizing {symbol}: {e}")
-            
+
     def get_channel_data(self, channel: str) -> list:
         """Get live data for a specific channel (for GUI)"""
         symbols = self.channels.get(channel, [])

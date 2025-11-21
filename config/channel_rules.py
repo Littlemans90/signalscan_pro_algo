@@ -6,7 +6,7 @@ SignalScan PRO - Channel Detection Rules
 CHANNEL_RULES = {
     'pregap': {
         'name': 'PreGap (Top Gapper)',
-        'price_min': 1.00,
+        'price_min': 0.50,
         'price_max': 15.00,
         'gap_pct_min': 10.0,
         'rvol_min': 2.0,
@@ -19,10 +19,10 @@ CHANNEL_RULES = {
     
     'hod': {
         'name': 'HOD (High of Day)',
-        'price_min': 1.00,
+        'price_min': 0.50,
         'price_max': 15.00,
         'must_be_hod': True,
-        'rvol_5min_min': 5.0,
+        'rvol_5min_min': 0.5,
         'float_max': 100_000_000,
         'float_low_alert': 20_000_000,  # "Low Float" alert
         'gap_pct_min': 10.0,
@@ -31,9 +31,9 @@ CHANNEL_RULES = {
     
     'runup': {
         'name': 'RunUP',
-        'price_min': 1.00,
+        'price_min': 0.50,
         'price_max': 15.00,
-        'rvol_5min_min': 5.0,
+        'rvol_5min_min': 0.5,
         'float_max': 10_000_000,  # Some say 20M
         'float_max_alt': 20_000_000,
         'gap_pct_min': 10.0,
@@ -47,7 +47,7 @@ CHANNEL_RULES = {
     'rvsl': {
         'name': 'Rvsl (Reversal)',
         'price_max': 15.00,
-        'rvol_min': 8.0,
+        'rvol_min': 0.5,
         'gap_pct_min': 8.0,  # Absolute value (±8%)
         'allow_negative_gap': True,
         'market_session': 'regular'

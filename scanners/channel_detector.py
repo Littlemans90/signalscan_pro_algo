@@ -65,34 +65,41 @@ class ChannelDetector:
             volume_avg >= rules['volume_avg_min']
         )
         
-    def _check_hod(self, data: dict) -> bool:
-        """Check HOD channel rules"""
-        rules = self.rules['hod']
-        
-        # Check if in regular session
-        if not self._is_regular_hours():
-            return False
-            
-        price = data.get('price', 0)
-        is_hod = data.get('is_hod', False)
-        rvol_5min = data.get('rvol_5min', 0)
-        float_shares = data.get('float', 0)
-        gap_pct = data.get('gap_pct', 0)
-        
-        return (
-            rules['price_min'] <= price <= rules['price_max'] and
-            is_hod and
-            rvol_5min >= rules['rvol_5min_min'] and
-            float_shares <= rules['float_max'] and
-            gap_pct >= rules['gap_pct_min']
-        )
-
     #def _check_hod(self, data: dict) -> bool:
+        #"""Check HOD channel rules"""
+        #rules = self.rules['hod']
+        
+        ## Check if in regular session
+        #if not self._is_regular_hours():
+            #return False
+            
+        #price = data.get('price', 0)
+        #is_hod = data.get('is_hod', False)
+        #rvol_5min = data.get('rvol_5min', 0)
+        #float_shares = data.get('float', 0)
+        #gap_pct = data.get('gap_pct', 0)
+        
+        ## DEBUG: Log why HOD failed
+        #symbol = data.get('symbol', 'UNKNOWN')
+        #self.log.scanner(f"[DETECTOR-HOD] {symbol}: price={price} (need {rules['price_min']}-{rules['price_max']}), is_hod={is_hod}, rvol_5min={rvol_5min} (need >={rules['rvol_5min_min']}), float={float_shares} (need <={rules['float_max']}), gap={gap_pct}% (need >={rules['gap_pct_min']})")
+        
+        #return (
+            #rules['price_min'] <= price <= rules['price_max'] and
+            #is_hod and
+            #rvol_5min >= rules['rvol_5min_min'] and
+            #float_shares <= rules['float_max'] and
+            #gap_pct >= rules['gap_pct_min']
+        #)
+
+    def _check_hod(self, data: dict) -> bool:
         """Check HOD channel rules - ULTRA MINIMAL FOR TESTING"""
+        symbol = data.get('symbol', 'UNKNOWN')
         price = data.get('price', 0)
         gap_pct = data.get('gap_pct', 0)
-        
-        # Accept anything with price > $1 and gap > 5%
+        # Log what we're checking
+        self.log.scanner(f"[HOD-TEST] {symbol}: price={price:.2f}, gap_pct={gap_pct:.2f}%")
+    
+       # Accept anything with price > $1 and gap > 5%
         return price >= 1.0 and gap_pct >= 5.0
   
     def _check_runup(self, data: dict) -> bool:
@@ -109,6 +116,10 @@ class ChannelDetector:
         gap_pct = data.get('gap_pct', 0)
         move_5min = data.get('move_5min', 0)
         move_10min = data.get('move_10min', 0)
+        
+        # DEBUG: Log why RunUP failed
+        symbol = data.get('symbol', 'UNKNOWN')
+        self.log.scanner(f"[DETECTOR-RUNUP] {symbol}: price={price}, rvol_5min={rvol_5min} (need >={rules['rvol_5min_min']}), float={float_shares} (need <={rules['float_max']}), gap={gap_pct}% (need >={rules['gap_pct_min']}), move_5min={move_5min}% (need {rules['quick_move_5min']}), move_10min={move_10min}% (need {rules['quick_move_10min']})")
         
         return (
             rules['price_min'] <= price <= rules['price_max'] and
@@ -130,6 +141,10 @@ class ChannelDetector:
         rvol = data.get('rvol', 0)
         gap_pct = abs(data.get('gap_pct', 0))  # Absolute value
         
+        # DEBUG: Log why Rvsl failed
+        symbol = data.get('symbol', 'UNKNOWN')
+        self.log.scanner(f"[DETECTOR-RVSL] {symbol}: price={price} (need <={rules['price_max']}), rvol={rvol} (need >={rules['rvol_min']}), gap={gap_pct}% (need >={rules['gap_pct_min']})")
+        
         return (
             price <= rules['price_max'] and
             rvol >= rules['rvol_min'] and
@@ -150,15 +165,19 @@ class ChannelDetector:
         
     def _is_premarket(self) -> bool:
         """Check if current time is in pre-market session"""
-        now = datetime.now().time()
+        import pytz
+        est = pytz.timezone('America/New_York')
+        now = datetime.now(est).time()  # ✅ USE EST TIME
         session = MARKET_SESSIONS['premarket']
         start = datetime.strptime(session['start'], '%H:%M').time()
         end = datetime.strptime(session['end'], '%H:%M').time()
         return start <= now < end
-        
+    
     def _is_regular_hours(self) -> bool:
         """Check if current time is in regular trading hours"""
-        now = datetime.now().time()
+        import pytz
+        est = pytz.timezone('America/New_York')
+        now = datetime.now(est).time()  # ✅ USE EST TIME
         session = MARKET_SESSIONS['regular']
         start = datetime.strptime(session['start'], '%H:%M').time()
         end = datetime.strptime(session['end'], '%H:%M').time()

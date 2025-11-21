@@ -9,8 +9,8 @@ import math
 from collections import defaultdict, deque
 from datetime import datetime
 from threading import Thread, Event
-from PyQt5.QtCore import QObject, pyqtSignal
-
+from queue import Queue
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from core.file_manager import FileManager
 from core.logger import Logger
 
@@ -66,7 +66,25 @@ class MomoVector(QObject):
         # Threading
         self.stop_event = Event()
         self.thread = None
+        
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
     
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                vector_data = self.signal_queue.get_nowait()
+                self.vectorsignal.emit(vector_data)
+                
+        except Exception as e:
+            self.log.crash(f"[MOMO-VECTOR] Error processing signal queue: {e}")
+
     def start(self):
         """Start MOMO Vector scanner"""
         self.log.scanner("MOMO-VECTOR Starting Vector scanner")
@@ -203,7 +221,7 @@ class MomoVector(QObject):
             # Filter: only emit if V-Score >= 4.0 or <= -4.0 AND vol_quality > 1.2
             if (abs(v_score) >= 4.0 and vol_quality >= 1.2):
                 self.log.scanner(f"MOMO-VECTOR {symbol} | V-Score:{v_score:.1f} | MTF:{mtf_alignment} | VQ:{vol_quality:.2f} | Signal:{signal}")
-                self.vectorsignal.emit(vectordata)
+                self.signal_queue.put(vectordata)
         
         except Exception as e:
             self.log.crash(f"MOMO-VECTOR Error updating {symbol}: {e}")

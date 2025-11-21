@@ -9,8 +9,8 @@ import math
 from collections import defaultdict, deque
 from datetime import datetime
 from threading import Thread, Event
-from PyQt5.QtCore import QObject, pyqtSignal
-
+from queue import Queue
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from core.file_manager import FileManager
 from core.logger import Logger
 
@@ -52,6 +52,24 @@ class MomoSqueeze(QObject):
         # Threading
         self.stop_event = Event()
         self.thread = None
+
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
+
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                squeeze_data = self.signal_queue.get_nowait()
+                self.squeezesignal.emit(squeeze_data)
+                
+        except Exception as e:
+            self.log.crash(f"[MOMO-SQUEEZE] Error processing signal queue: {e}")
     
     def start(self):
         """Start MOMO Squeeze scanner"""
@@ -199,7 +217,7 @@ class MomoSqueeze(QObject):
             # Filter: only emit if COILING with intensity > 0.4 OR just FIRED
             if (status == 'COILING' and intensity >= 0.4) or status == 'FIRED':
                 self.log.scanner(f"MOMO-SQUEEZE {symbol} | Status:{status} | Intensity:{intensity:.2f} | Hist:{histogram:.3f} | Setup:{setup}")
-                self.squeezesignal.emit(squeezedata)
+                self.signal_queue.put(squeezedata)
         
         except Exception as e:
             self.log.crash(f"MOMO-SQUEEZE Error updating {symbol}: {e}")

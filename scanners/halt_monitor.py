@@ -10,10 +10,10 @@ from datetime import datetime
 import time
 from threading import Thread, Event
 import pytz
-from PyQt5.QtCore import QObject, pyqtSignal
+from queue import Queue
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from core.file_manager import FileManager
 from core.logger import Logger
-
 
 class HaltMonitor(QObject):
     # PyQt5 signal for live GUI updates
@@ -26,9 +26,27 @@ class HaltMonitor(QObject):
         self.stop_event = Event()
         self.thread = None
         
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
+        
         # Fetch interval: 60 seconds (matches NASDAQ RSS update frequency)
         self.fetch_interval = 60  # seconds
-        
+
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                halt_data = self.signal_queue.get_nowait()
+                self.halt_signal.emit(halt_data)
+                
+        except Exception as e:
+            self.log.crash(f"[HALT-MONITOR] Error processing signal queue: {e}")
+
     def start(self):
         """Start halt monitoring"""
         self.log.halt("[HALT-MONITOR] Starting halt monitor (every 60 seconds)")
@@ -349,9 +367,9 @@ class HaltMonitor(QObject):
             
             self.log.halt(f"[HALT-MONITOR] Saved {len(all_recent_halts)} recent halts, {len(active_halts_only)} active")
             
-            # Emit signal for each ACTIVE halt (for live GUI updates)
+            # Queue signal for each ACTIVE halt (THREAD-SAFE)
             for symbol, halt_data in active_halts_only.items():
-                self.halt_signal.emit({'symbol': symbol, **halt_data})
+                self.signal_queue.put({'symbol': symbol, **halt_data})
                 
         except Exception as e:
             self.log.crash(f"[HALT-MONITOR] Error processing halts: {e}")

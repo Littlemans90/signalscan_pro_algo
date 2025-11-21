@@ -9,9 +9,9 @@ import math
 from collections import defaultdict, deque
 from datetime import datetime
 from threading import Thread, Event
-from PyQt5.QtCore import QObject, pyqtSignal
+from queue import Queue
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 import numpy as np
-
 from core.file_manager import FileManager
 from core.logger import Logger
 
@@ -54,7 +54,25 @@ class MomoTrend(QObject):
         # Threading
         self.stop_event = Event()
         self.thread = None
+        
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
     
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                trend_data = self.signal_queue.get_nowait()
+                self.trendsignal.emit(trend_data)
+                
+        except Exception as e:
+            self.log.crash(f"[MOMO-TREND] Error processing signal queue: {e}")
+
     def start(self):
         """Start MOMO Trend scanner"""
         self.log.scanner("MOMO-TREND Starting Trend scanner")
@@ -175,7 +193,7 @@ class MomoTrend(QObject):
             # Filter: only emit if trend_strength >= 1.5 or <= -1.5 AND confidence High/Med
             if abs(trend_strength) >= 1.5 and confidence in ['High', 'Med']:
                 self.log.scanner(f"MOMO-TREND {symbol} | Strength:{trend_strength:.2f} | Model:{model} | Conf:{confidence} | Signal:{signal}")
-                self.trendsignal.emit(trenddata)
+                self.signal_queue.put(trenddata)
         
         except Exception as e:
             self.log.crash(f"MOMO-TREND Error updating {symbol}: {e}")

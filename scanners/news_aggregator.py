@@ -11,13 +11,13 @@ import time
 import requests
 from datetime import datetime, timedelta
 from threading import Thread, Event
+from queue import Queue
 from alpaca.data.live import NewsDataStream
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from core.file_manager import FileManager
 from core.logger import Logger
 from config.api_keys import API_KEYS
 from config.keywords import categorize_news_by_age, should_exclude
-
 
 class NewsAggregator(QObject):
     # PyQt5 signal for live GUI updates
@@ -30,6 +30,14 @@ class NewsAggregator(QObject):
         self.stop_event = Event()
         self.primary_thread = None
         self.secondary_thread = None
+        
+        # Thread-safe queue for signal emissions
+        self.signal_queue = Queue()
+        
+        # Timer to process queued signals on main thread
+        self.signal_timer = QTimer()
+        self.signal_timer.timeout.connect(self._process_signal_queue)
+        self.signal_timer.start(100)  # Check queue every 100ms
         
         # API Keys
         self.alpaca_key = API_KEYS['ALPACA_API_KEY']
@@ -54,7 +62,17 @@ class NewsAggregator(QObject):
         
         # News cache (de-duplication)
         self.seen_news_ids = set()
-        
+
+    def _process_signal_queue(self):
+        """Process queued signal emissions on the main GUI thread"""
+        try:
+            while not self.signal_queue.empty():
+                gui_data = self.signal_queue.get_nowait()
+                self.news_signal.emit(gui_data)
+                
+        except Exception as e:
+            self.log.crash(f"[NEWS-AGGREGATOR] Error processing signal queue: {e}")
+
     def start(self):
         """Start news aggregation"""
         self.log.news("[NEWS-AGGREGATOR] Starting news aggregation")
@@ -320,8 +338,8 @@ class NewsAggregator(QObject):
                 self.fm.save_bkgnews(bkgnews)
                 self.log.news(f"[NEWS-AGGREGATOR] BREAKING: {item['symbol']} - {headline[:50]}...")
                 
-                # Emit signal to GUI
-                self.news_signal.emit(gui_data)
+                # Queue signal to GUI (THREAD-SAFE)
+                self.signal_queue.put(gui_data)
                 
             elif category == 'general':
                 # Save to news.json
@@ -334,8 +352,8 @@ class NewsAggregator(QObject):
                 self.fm.save_news(news)
                 self.log.news(f"[NEWS-AGGREGATOR] NEWS: {item['symbol']} - {headline[:50]}...")
                 
-                # Emit signal to GUI
-                self.news_signal.emit(gui_data)
+                # Queue signal to GUI (THREAD-SAFE)
+                self.signal_queue.put(gui_data)
                 
         except Exception as e:
             self.log.crash(f"[NEWS-AGGREGATOR] Error processing news item: {e}")
