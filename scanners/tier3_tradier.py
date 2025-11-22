@@ -70,6 +70,15 @@ class TradierCategorizer(QObject):
             'rvsl': [],
             'bkgnews': []
         }
+        
+        # Cache management for API efficiency
+        self.no_data_symbols = set()  # Symbols with no historical data
+        self.prev_close_cache_time = {}  # {symbol: timestamp}
+        self.cache_duration = 3600  # 1 hour
+        
+        # Cooldown for symbols that don't match any channel
+        self.failed_categorizations = {}  # {symbol: timestamp}
+        self.categorization_cooldown = 60  # Don't recheck for 60 seconds
     
     def _process_signal_queue(self):
         """Process queued signal emissions on the main GUI thread"""
@@ -80,13 +89,19 @@ class TradierCategorizer(QObject):
                 # Now we're on the main thread, safe to emit signals
                 if channel == 'pregap':
                     self.pregap_signal.emit(stock_data)
+                    self.log.scanner(f"[TIER3-SIGNAL-EMIT] OK Emitted PREGAP signal for {stock_data.get('symbol')}")
                 elif channel == 'hod':
                     self.hod_signal.emit(stock_data)
+                    self.log.scanner(f"[TIER3-SIGNAL-EMIT] OK Emitted HOD signal for {stock_data.get('symbol')}")
                 elif channel == 'runup':
                     self.runup_signal.emit(stock_data)
+                    self.log.scanner(f"[TIER3-SIGNAL-EMIT] OK Emitted RUNUP signal for {stock_data.get('symbol')}")
                 elif channel == 'rvsl':
                     self.reversal_signal.emit(stock_data)
-                    
+                    self.log.scanner(f"[TIER3-SIGNAL-EMIT] OK Emitted REVERSAL signal for {stock_data.get('symbol')}")
+                
+                    #self.log.scanner(f"[TIER3-SIGNAL-EMIT] OK Emitted {channel.upper()} signal for {stock_data.get('symbol')}")
+        
         except Exception as e:
             self.log.crash(f"[TIER3-TRADIER] Error processing signal queue: {e}")
     
@@ -171,7 +186,7 @@ class TradierCategorizer(QObject):
                 self._update_subscriptions(all_symbols)
                 
                 # Wait 10 seconds
-                time.sleep(2)
+                time.sleep(30)
                 
             except Exception as e:
                 self.log.crash(f"[TIER3-TRADIER] Error in run loop: {e}")
@@ -491,6 +506,13 @@ class TradierCategorizer(QObject):
     def _categorize_symbol(self, symbol: str):
         """Categorize symbol into appropriate channel and emit signal to GUI"""
         self.log.scanner(f"[TIER3-DEBUG] _categorize_symbol CALLED for {symbol}")
+        
+        # Check cooldown - skip if recently failed to categorize
+        if symbol in self.failed_categorizations:
+            time_since_fail = time.time() - self.failed_categorizations[symbol]
+            if time_since_fail < self.categorization_cooldown:
+                return
+        
         try:
             live_data = self.live_data.get(symbol, {})
             
@@ -528,6 +550,10 @@ class TradierCategorizer(QObject):
 
             # Detect channel
             channel = self.detector.detect_channel(stock_data)
+
+            # Add cooldown for non-matching symbols
+            if not channel:
+                self.failed_categorizations[symbol] = time.time()
             
             if channel:
                 self.log.scanner(f"[TIER3-DETECT] OK {symbol} -> {channel.upper()}")
@@ -572,35 +598,74 @@ class TradierCategorizer(QObject):
         
         if not symbols:
             return
+        
+        # Filter out blacklisted symbols and recently cached ones
+        current_time = time.time()
+        symbols_to_fetch = []
+        
+        for symbol in symbols:
+            # Skip if blacklisted
+            if symbol in self.no_data_symbols:
+                continue
             
+            # Skip if recently cached
+            if symbol in self.prev_close_cache_time:
+                age = current_time - self.prev_close_cache_time[symbol]
+                if age < self.cache_duration:
+                    continue
+            
+            symbols_to_fetch.append(symbol)
+        
+        if not symbols_to_fetch:
+            self.log.scanner(f"[TIER3-CACHE] All symbols cached or blacklisted, skipping fetch")
+            return
+        
+        self.log.scanner(f"[TIER3-TRADIER] Fetching prev_closes for {len(symbols_to_fetch)} symbols (filtered from {len(symbols)})")
+        
         try:
-            # Get yesterday's date for historical bars
             yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             
-            for symbol in symbols[:100]:  # Process in batches
-                url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&interval=daily&start={yesterday}&end={yesterday}"
-                headers = {
-                    'Authorization': f'Bearer {self.api_key}',
-                    'Accept': 'application/json'
-                }
+            # Process in batches of 50
+            batch_size = 50
+            for i in range(0, len(symbols_to_fetch), batch_size):
+                batch = symbols_to_fetch[i:i + batch_size]
+                self.log.scanner(f"[TIER3-BATCH] Processing batch {i//batch_size + 1}/{(len(symbols_to_fetch)-1)//batch_size + 1} ({len(batch)} symbols)")
                 
-                response = requests.get(url, headers=headers, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Extract close price from historical bar
-                history = data.get('history', {})
-                if history and 'day' in history:
-                    day = history['day']
-                    if isinstance(day, dict):
-                        close = day.get('close')
-                        if close:
-                            self.prev_closes[symbol] = float(close)
-                            self.log.scanner(f"[TIER3-FETCH] {symbol}: prev_close = {close}")
+                for symbol in batch:
+                    url = f"https://api.tradier.com/v1/markets/history?symbol={symbol}&interval=daily&start={yesterday}&end={yesterday}"
+                    headers = {
+                        'Authorization': f'Bearer {self.api_key}',
+                        'Accept': 'application/json'
+                    }
+                    
+                    try:
+                        response = requests.get(url, headers=headers, timeout=30)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        history = data.get('history', {})
+                        if history and 'day' in history:
+                            day = history['day']
+                            if isinstance(day, dict):
+                                close = day.get('close')
+                                if close:
+                                    self.prev_closes[symbol] = float(close)
+                                    self.prev_close_cache_time[symbol] = current_time
+                                    self.log.scanner(f"[TIER3-FETCH] {symbol}: prev_close = {close}")
+                                else:
+                                    self.no_data_symbols.add(symbol)
+                                    self.log.scanner(f"[TIER3-FETCH] {symbol}: NO CLOSE PRICE (blacklisted)")
                         else:
-                            self.log.scanner(f"[TIER3-FETCH] {symbol}: NO CLOSE PRICE")
-                else:
-                    self.log.scanner(f"[TIER3-FETCH] {symbol}: NO HISTORICAL DATA")
+                            self.no_data_symbols.add(symbol)
+                            self.log.scanner(f"[TIER3-FETCH] {symbol}: NO HISTORICAL DATA (blacklisted)")
+                    
+                    except Exception as e:
+                        self.log.scanner(f"[TIER3-FETCH] Error fetching {symbol}: {e}")
+                        continue
+                
+                # Rate limiting between batches
+                if i + batch_size < len(symbols_to_fetch):
+                    time.sleep(0.5)
                     
         except Exception as e:
             self.log.scanner(f"[TIER3-FETCH] Error fetching prev_closes: {e}")

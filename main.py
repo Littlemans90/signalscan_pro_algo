@@ -131,6 +131,9 @@ class SignalScanPRO:
             tier3=self.tier3,
         )
         
+        print("[GUI] Connecting scanner signals to GUI...")
+        window.connect_scanner_signals(self.tier3, self.news, self.halts)
+        
         print("[GUI] Showing main window...")
         window.show()
         

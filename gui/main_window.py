@@ -353,6 +353,7 @@ class MainWindow(QMainWindow):
     def on_pregap_update(self, stock_data):
         """Receive PreGap channel update (LIVE ONLY)"""
         self.log.scanner(f"[GUI<-TIER3] Received PREGAP signal: {stock_data.get('symbol')}")
+        self.log.scanner(f"[GUI-SLOT] OK PREGAP received: {stock_data.get('symbol')}")
         self.sound_alerts.play_sound('pregap')
         self._add_or_update_stock(self.pregap_table, stock_data, [
             'symbol', 'price', 'change_pct', 'timestamp', 'gap_pct', 'volume', 'rvol', 'float', 'news'
@@ -374,6 +375,7 @@ class MainWindow(QMainWindow):
     def on_hod_update(self, stock_data):
         """Receive HOD channel update (LIVE ONLY)"""
         self.log.scanner(f"[GUI<-TIER3] Received HOD signal: {stock_data.get('symbol')}")
+        self.log.scanner(f"[GUI-SLOT] OK HOD received: {stock_data.get('symbol')}")
         self._add_or_update_stock(self.hod_table, stock_data, [
             'symbol', 'price', 'change_pct', 'timestamp', 'hod_price', 'volume', 'rvol', 'float', 'news'
         ])
@@ -394,6 +396,7 @@ class MainWindow(QMainWindow):
     def on_runup_update(self, stock_data):
         """Receive RunUP channel update (LIVE ONLY)"""
         self.log.scanner(f"[GUI<-TIER3] Received RUNUP signal: {stock_data.get('symbol')}")
+        self.log.scanner(f"[GUI-SLOT] OK RUNUP received: {stock_data.get('symbol')}")
         self._add_or_update_stock(self.runup_table, stock_data, [
             'symbol', 'price', 'change_pct', 'timestamp', 'change_5min', 'volume', 'rvol', 'float', 'news'
         ])
@@ -414,6 +417,7 @@ class MainWindow(QMainWindow):
     def on_reversal_update(self, stock_data):
         """Receive Reversal channel update (LIVE ONLY)"""
         self.log.scanner(f"[GUI<-TIER3] Received REVERSAL signal: {stock_data.get('symbol')}")
+        self.log.scanner(f"[GUI-SLOT] OK REVERSAL received: {stock_data.get('symbol')}")
         self._add_or_update_stock(self.rvsl_table, stock_data, [
             'symbol', 'price', 'change_pct', 'timestamp', 'gap_pct', 'volume', 'rvol', 'float', 'news'
         ])
@@ -874,7 +878,8 @@ class MainWindow(QMainWindow):
         if tier3 and hasattr(tier3, 'hod_signal'):
             tier3.hod_signal.connect(self.on_hod_update)
             self.log.scanner("[GUI] OK HOD feed connected (LIVE)")
-        
+            self.log.scanner(f"[GUI-DEBUG] Signal check - HOD signal exists: {hasattr(tier3, 'hod_signal')}, Slot exists: {hasattr(self, 'on_hod_update')}")
+
         if tier3 and hasattr(tier3, 'runup_signal'):
             tier3.runup_signal.connect(self.on_runup_update)
             self.log.scanner("[GUI] OK RunUP feed connected (LIVE)")
