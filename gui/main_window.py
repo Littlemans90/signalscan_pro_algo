@@ -349,6 +349,40 @@ class MainWindow(QMainWindow):
     # LIVE DATA FEED SLOTS - Receive real-time updates from scanners
     # =========================================================================
     
+    def _update_time(self):
+        """Update the time display (12-hour format, no date)"""
+        # Local time
+        local_time = datetime.now()
+        self.local_time_label.setText(f"Local: {local_time.strftime('%I:%M %p')}")
+        
+        # NYC time (ET)
+        nyc_tz = pytz.timezone('America/New_York')
+        nyc_time = datetime.now(nyc_tz)
+        self.nyc_time_label.setText(f"NYC: {nyc_time.strftime('%I:%M %p')}")
+        
+        # Check if weekend (Saturday=5, Sunday=6)
+        if nyc_time.weekday() in [5, 6]:
+            self.market_session.setText("Market: WEEKEND")
+            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ff0000; font-size: 36px;")
+            return
+        
+        # Update market session based on NYC time
+        hour = nyc_time.hour
+        minute = nyc_time.minute
+        
+        if 4 <= hour < 9 or (hour == 9 and minute < 30):
+            self.market_session.setText("Market: PREMARKET")
+            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ffaa00; font-size: 36px;")
+        elif (hour == 9 and minute >= 30) or (9 < hour < 16):
+            self.market_session.setText("Market: OPEN")
+            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #00ff00; font-size: 36px;")
+        elif 16 <= hour < 20:
+            self.market_session.setText("Market: AFTERHOURS")
+            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ffaa00; font-size: 36px;")
+        else:
+            self.market_session.setText("Market: CLOSED")
+            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ff0000; font-size: 36px;")
+    
     @pyqtSlot(dict)
     def on_pregap_update(self, stock_data):
         """Receive PreGap channel update (LIVE ONLY)"""
@@ -1353,33 +1387,65 @@ class MainWindow(QMainWindow):
 
         return table
         
-    def _update_time(self):
-        """Update the time display (12-hour format, no date)"""
-        # Local time
-        local_time = datetime.now()
-        self.local_time_label.setText(f"Local: {local_time.strftime('%I:%M %p')}")
+    def _is_market_closed_today(self, nyc_time):
+        """
+        Check if market is closed (weekend or US market holiday)
+        Returns: (is_closed, reason) where reason is "WEEKEND" or "HOLIDAY" or None
+        """
+        # Check if weekend (Saturday=5, Sunday=6)
+        if nyc_time.weekday() in [5, 6]:
+            return (True, "WEEKEND")
         
-        # NYC time (ET)
-        nyc_tz = pytz.timezone('America/New_York')
-        nyc_time = datetime.now(nyc_tz)
-        self.nyc_time_label.setText(f"NYC: {nyc_time.strftime('%I:%M %p')}")
+        # Check if US market holiday (2025 calendar)
+        # Format: (month, day)
+        holidays_2025 = [
+            (1, 1),    # New Year's Day
+            (1, 20),   # MLK Day
+            (2, 17),   # Presidents Day
+            (4, 18),   # Good Friday
+            (5, 26),   # Memorial Day
+            (6, 19),   # Juneteenth
+            (7, 4),    # Independence Day
+            (9, 1),    # Labor Day
+            (11, 27),  # Thanksgiving
+            (12, 25),  # Christmas
+        ]
         
-        # Update market session based on NYC time
-        hour = nyc_time.hour
-        minute = nyc_time.minute
+        current_date = (nyc_time.month, nyc_time.day)
+        if current_date in holidays_2025:
+            return (True, "HOLIDAY")
         
-        if 4 <= hour < 9 or (hour == 9 and minute < 30):
-            self.market_session.setText("Market: PREMARKET")
-            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ffaa00; font-size: 36px;")
-        elif (hour == 9 and minute >= 30) or (9 < hour < 16):
-            self.market_session.setText("Market: OPEN")
-            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #00ff00; font-size: 36px;")
-        elif 16 <= hour < 20:
-            self.market_session.setText("Market: AFTERHOURS")
-            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ffaa00; font-size: 36px;")
-        else:
-            self.market_session.setText("Market: CLOSED")
-            self.market_session.setStyleSheet("font-weight: bold; padding: 5px; color: #ff0000; font-size: 36px;")
+        return (False, None)
+    
+    def _is_market_closed_today(self, nyc_time):
+        """
+        Check if market is closed (weekend or US market holiday)
+        Returns: (is_closed, reason) where reason is "WEEKEND" or "HOLIDAY" or None
+        """
+        # Check if weekend (Saturday=5, Sunday=6)
+        if nyc_time.weekday() in [5, 6]:
+            return (True, "WEEKEND")
+        
+        # Check if US market holiday (2025 calendar)
+        # Format: (month, day)
+        holidays_2025 = [
+            (1, 1),    # New Year's Day
+            (1, 20),   # MLK Day
+            (2, 17),   # Presidents Day
+            (4, 18),   # Good Friday
+            (5, 26),   # Memorial Day
+            (6, 19),   # Juneteenth
+            (7, 4),    # Independence Day
+            (9, 1),    # Labor Day
+            (11, 27),  # Thanksgiving
+            (12, 25),  # Christmas
+        ]
+        
+        current_date = (nyc_time.month, nyc_time.day)
+        if current_date in holidays_2025:
+            return (True, "HOLIDAY")
+        
+        return (False, None)
     
     def _update_indices(self):
         """Update market indices (S&P 500, NASDAQ, DOW)"""
