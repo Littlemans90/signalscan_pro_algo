@@ -206,9 +206,3 @@ Glossary
 Contributing, security & license
 - See CONTRIBUTING.md and SECURITY.md for contribution and vulnerability-reporting guidelines.
 - This project uses the LICENSE file in the repository root for licensing terms.
-
-Contact & next steps
-If you want I can:
-- Tailor the configuration and run commands to the repo's actual language/runtime (show me file structure or tell me runtime),
-- Generate example config files (config.yml / .env.sample),
-- Add a diagram or quickstart Docker Compose for one-click runs.
